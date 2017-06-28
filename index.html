@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<!--
+Created using JS Bin
+http://jsbin.com
+
+Copyright (c) 2017 by anonymous (http://jsbin.com/govoniqogo/1/edit)
+
+Released under the MIT license: http://jsbin.mit-license.org
+-->
+<meta name="robots" content="noindex">
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width">
+    <title>Tallinn apartment average m2 prices near bus stops</title>
+    <script src="https://maps.googleapis.com/maps/api/js?sensor=false&key=AIzaSyC4HjyiNJF6Au_pP4B8G1orBuhU5pxNdFE"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/4.2.3/d3.min.js"></script>
+
+    <style id="jsbin-css">
+        body, html {
+            font-family: sans-serif, Arial, Verdana, "Trebuchet MS";
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            padding: 0;
+        }
+
+        .SvgOverlay svg {
+            position: absolute;
+            width: 4000px;
+            height: 4000px;
+            top: 0;
+            left: 0;
+            margin-left: -2000px;
+            margin-top: -2000px;
+        }
+
+        #info {
+            font-size: 24px;
+            position: fixed;
+            top: 0;
+            background-color: #333;
+            color: white;
+            width: 100%;
+            line-height: 2;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+<div id="map" style="width: 100%; height:100%;"></div>
+<script id="jsbin-javascript">
+    var map = new google.maps.Map(document.getElementById('map'), {
+        zoom: 10,
+        mapTypeId: google.maps.MapTypeId.ROADMAP,
+        center: new google.maps.LatLng(59.4089728, 24.6958946),
+        noClear: true
+    });
+
+    var overlay = new google.maps.OverlayView();
+    var shift = 2000;
+    var mapData = [];
+    var priceData = [];
+
+    d3.json('/peatused.json', function (a) {
+        mapData = a;
+        console.log('a');
+        d3.json('/apt-price-arr.json', function (a) {
+            priceData = a;
+            init();
+        });
+    });
+
+
+    function init() {
+
+        mapData = mapData.map(function (a) {
+            return [a[1] / 100000, a[2] / 100000, a[0]]
+        });
+
+        d3.select('body')
+            .append('div')
+            .attr('id', 'info')
+            .text('Palun oota, arvutan (kuni 1 min)');
+
+        function pointInPolygon(point, vs) {
+            // http://bl.ocks.org/bycoffe/5575904
+            var xi, xj, i, intersect,
+                x = point[0],
+                y = point[1],
+                inside = false;
+            for (var i = 0, j = vs.length - 1; i < vs.length; j = i++) {
+                xi = vs[i][0],
+                    yi = vs[i][1],
+                    xj = vs[j][0],
+                    yj = vs[j][1],
+                    intersect = ((yi > y) != (yj > y))
+                        && (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
+                if (intersect) inside = !inside;
+            }
+            return inside;
+        }
+
+        function isInPolygon(item, polygon, transformer) {
+            var t = transformer([item[2], item[3]]);
+            //console.log(item);
+            try {
+                return pointInPolygon(t, polygon)
+            } catch (e) {
+                return false
+            }
+        }
+
+        function createPolyPriceIndex(polygons, prices, transformer) {
+            prices.forEach(function (price) {
+                polygons.forEach(function (poly, i) {
+                    if (isInPolygon(price, poly, transformer)) {
+                        if (ppIndex[i]) {
+                            ppIndex[i].push(price);
+                        } else {
+                            ppIndex[i] = [price]
+                        }
+                    }
+                });
+            });
+            var listener = google.maps.event.addListener(map, "idle", function() {
+                map.setZoom(11);
+                google.maps.event.removeListener(listener);
+            });
+        }
+
+        function getAverageFromArrayOfPrices(arr) {
+
+            try {
+                return arr.reduce(function (a, o, i, p) {
+                    return a + o[1] / p.length;
+                }, 0)
+            } catch (e) {
+                return 0;
+            }
+        }
+
+        var ppIndex = [];
+
+        overlay.onAdd = function () {
+            var layer = d3.select(this.getPanes().overlayMouseTarget).append("div").attr("class", "SvgOverlay");
+            overlay.draw = function () {
+
+                var overlayProjection = this.getProjection();
+                var padding = 10;
+
+                layer
+                    .html(null)
+                    .append('svg')
+                    .selectAll('circle')
+                    .data(mapData)
+                    .enter()
+                    .append('circle')
+                    .attr("cx", function (d) {
+                        return transform(d)[0];
+                    })
+                    .attr("cy", function (d) {
+                        return transform(d)[1];
+                    })
+                    .attr("r", 1)
+                    .style("fill", "purple");
+
+                var polys = d3.voronoi()
+                    .polygons(mapData.map(function (a) {
+                        return [transform(a)[0], transform(a)[1]];
+                    }));
+
+                if (ppIndex.length === 0) {
+                    setTimeout(function () {
+                        createPolyPriceIndex(polys, priceData, transform);
+                        var evt = document.createEvent('UIEvents');
+                        evt.initUIEvent('resize', true, false, window, 0);
+                        window.dispatchEvent(evt);
+                    }, 1);
+                }
+
+                var svg = layer.select('svg')
+
+                var color = function (n) {
+                    if (!n) {
+                        return 'none';
+                    }
+                    var mod = 100;
+                    n = (n - mod) / (3600 - mod) * 100;
+                    var R = (255 * n) / 100;
+                    var G = (255 * (100 - n)) / 100;
+                    var B = 0;
+                    return d3.rgb(R, G, B);
+                };
+
+
+                var p = svg
+                    .attr('class', 'polys')
+                    .selectAll('path')
+                    .data(polys)
+                    .enter()
+                    .append('path')
+                    .attr('d', function (d) {
+                        return "M" + d.join("L") + "Z";
+                    })
+                    .attr('id', function (d, i) {
+                        return "cell-" + i;
+                    })
+                    .attr('pointer-events', 'all')
+                    .style('stroke', 'red')
+                    .style('opacity', 0.5)
+                    .on('mouseover', function (d, i) {
+                        d3.select('#info').html(mapData[i][2] +
+                            "<br>" + getAverageFromArrayOfPrices(ppIndex[i]).toFixed(0) + '€/m<sup>2</sup>');
+                    })
+                    .attr('fill', function (d, i) {
+                        return color(getAverageFromArrayOfPrices(ppIndex[i]));
+                    });
+                ;
+
+                var text = svg.append("text")
+                    .attr("x", 6)
+                    .attr("dy", 15);
+
+                text.append("textPath")
+                    .attr("xlink:href", "#cell-1")
+                    .attr("class", "cell-label")
+                    .text("My counter text");
+
+                function transform(d) {
+                    d = new google.maps.LatLng(d[0], d[1]);
+                    d = overlayProjection.fromLatLngToDivPixel(d);
+                    return [d.x + shift, d.y + shift];
+                }
+            }
+
+
+        }
+
+        overlay.setMap(map);
+    }
+
+</script>
+</body>
+</html>
